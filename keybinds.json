@@ -1,0 +1,10 @@
+{
+  "keybinds": {
+    "main": "r",
+    "sub1": "t",
+    "sub2": "u",
+    "sub3": "i",
+    "sub4": "o"
+  },
+  "active_subtimers": 1
+}
