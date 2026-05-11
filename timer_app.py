@@ -41,6 +41,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from functools import partial
+
 try:
     import keyboard
 except Exception:
@@ -439,6 +441,56 @@ class IntervalsManagerDialog(QDialog):
         form = QFormLayout()
         self.interval_text_edit = QLineEdit(self)
         form.addRow("Set Name:", self.interval_text_edit)
+        # Auto-generate controls: offset (s), step (s), total minutes
+        auto_row = QHBoxLayout()
+        self.offset_spin = QSpinBox(self)
+        self.offset_spin.setMinimum(0)
+        self.offset_spin.setMaximum(3600)
+        self.offset_spin.setValue(24)
+        self.offset_spin.setSuffix(" s")
+        self.step_spin = QSpinBox(self)
+        self.step_spin.setMinimum(1)
+        self.step_spin.setMaximum(3600)
+        self.step_spin.setValue(14)
+        self.step_spin.setSuffix(" s")
+        self.total_min_spin = QSpinBox(self)
+        self.total_min_spin.setMinimum(1)
+        self.total_min_spin.setMaximum(1440)
+        self.total_min_spin.setValue(5)
+        self.total_min_spin.setSuffix(" min")
+        auto_btn = QPushButton("Auto-generate", self)
+        auto_btn.clicked.connect(self.auto_generate_intervals)
+        auto_row.addWidget(QLabel("Offset:", self))
+        auto_row.addWidget(self.offset_spin)
+        auto_row.addWidget(QLabel("Step:", self))
+        auto_row.addWidget(self.step_spin)
+        auto_row.addWidget(QLabel("Up to:", self))
+        auto_row.addWidget(self.total_min_spin)
+        auto_row.addWidget(auto_btn)
+        form.addRow(auto_row)
+        # Per-set keybind controls for -1/+1 second
+        key_row = QHBoxLayout()
+        key_row.addWidget(QLabel("Prev Key:", self))
+        self.key_prev_label = QLabel("q", self)
+        key_row.addWidget(self.key_prev_label)
+        key_prev_btn = QPushButton("Change", self)
+        key_prev_btn.clicked.connect(self.change_prev_key)
+        key_row.addWidget(key_prev_btn)
+        key_prev_unbind = QPushButton("Unbind", self)
+        key_prev_unbind.clicked.connect(self.unbind_prev_key)
+        key_row.addWidget(key_prev_unbind)
+
+        key_row.addSpacing(8)
+        key_row.addWidget(QLabel("Next Key:", self))
+        self.key_next_label = QLabel("e", self)
+        key_row.addWidget(self.key_next_label)
+        key_next_btn = QPushButton("Change", self)
+        key_next_btn.clicked.connect(self.change_next_key)
+        key_row.addWidget(key_next_btn)
+        key_next_unbind = QPushButton("Unbind", self)
+        key_next_unbind.clicked.connect(self.unbind_next_key)
+        key_row.addWidget(key_next_unbind)
+        form.addRow(key_row)
         root.addLayout(form)
 
         self.list_widget = QListWidget(self)
@@ -489,6 +541,16 @@ class IntervalsManagerDialog(QDialog):
         self.set_combo.setCurrentIndex(self.current_set_index)
         self.set_combo.blockSignals(False)
 
+    def update_key_labels(self) -> None:
+        # Update displayed key labels from current set
+        ks = {"key_prev": "", "key_next": ""}
+        if 0 <= self.current_set_index < len(self.result_sets):
+            s = self.result_sets[self.current_set_index]
+            ks["key_prev"] = str(s.get("key_prev", "") or "")
+            ks["key_next"] = str(s.get("key_next", "") or "")
+        self.key_prev_label.setText(ks["key_prev"] or "(none)")
+        self.key_next_label.setText(ks["key_next"] or "(none)")
+
     def on_set_changed(self, index: int) -> None:
         if index < 0 or index >= len(self.result_sets):
             return
@@ -499,6 +561,7 @@ class IntervalsManagerDialog(QDialog):
         self.result_intervals = list(self.result_sets[index].get("intervals", []))
         self.interval_text_edit.setText(str(self.result_sets[index].get("name", DEFAULT_INTERVAL_NAME)))
         self.rebuild_list()
+        self.update_key_labels()
 
     def rebuild_list(self) -> None:
         self.list_widget.clear()
@@ -510,7 +573,7 @@ class IntervalsManagerDialog(QDialog):
         return self.list_widget.currentRow()
 
     def add_set(self) -> None:
-        new_set = {"name": f"Set {len(self.result_sets) + 1}", "intervals": []}
+        new_set = {"name": f"Set {len(self.result_sets) + 1}", "intervals": [], "key_prev": "q", "key_next": "e"}
         self.result_sets.append(new_set)
         self.rebuild_set_combo()
         self.set_combo.setCurrentIndex(len(self.result_sets) - 1)
@@ -525,6 +588,7 @@ class IntervalsManagerDialog(QDialog):
         self.current_set_index = min(self.current_set_index, len(self.result_sets) - 1)
         self.rebuild_set_combo()
         self.set_combo.setCurrentIndex(self.current_set_index)
+        self.update_key_labels()
 
     def add_interval(self) -> None:
         value, ok = QInputDialog.getText(self, "Add Interval", "Enter time (MM:SS, HH:MM:SS, or seconds):")
@@ -541,6 +605,32 @@ class IntervalsManagerDialog(QDialog):
         self.result_intervals.append(sec)
         self.rebuild_list()
         self.list_widget.setCurrentRow(len(self.result_intervals) - 1)
+
+    def change_prev_key(self) -> None:
+        key, ok = KeyCaptureDialog.get_key(self)
+        if not ok:
+            return
+        if 0 <= self.current_set_index < len(self.result_sets):
+            self.result_sets[self.current_set_index]["key_prev"] = key
+        self.update_key_labels()
+
+    def unbind_prev_key(self) -> None:
+        if 0 <= self.current_set_index < len(self.result_sets):
+            self.result_sets[self.current_set_index]["key_prev"] = ""
+        self.update_key_labels()
+
+    def change_next_key(self) -> None:
+        key, ok = KeyCaptureDialog.get_key(self)
+        if not ok:
+            return
+        if 0 <= self.current_set_index < len(self.result_sets):
+            self.result_sets[self.current_set_index]["key_next"] = key
+        self.update_key_labels()
+
+    def unbind_next_key(self) -> None:
+        if 0 <= self.current_set_index < len(self.result_sets):
+            self.result_sets[self.current_set_index]["key_next"] = ""
+        self.update_key_labels()
 
     def edit_interval(self) -> None:
         idx = self.selected_index()
@@ -574,6 +664,36 @@ class IntervalsManagerDialog(QDialog):
         self.result_intervals.pop(idx)
         self.rebuild_list()
         self.list_widget.setCurrentRow(min(idx, len(self.result_intervals) - 1))
+
+    def auto_generate_intervals(self) -> None:
+        # Generate intervals starting at offset (seconds), stepping by step (seconds)
+        # until total_min_spin minutes is reached.
+        offset = int(self.offset_spin.value())
+        step = int(self.step_spin.value())
+        total_min = int(self.total_min_spin.value())
+        if step <= 0:
+            QMessageBox.warning(self, "Invalid Step", "Step must be greater than 0 seconds.")
+            return
+        total_seconds = max(0, total_min * 60)
+        items: list[float] = []
+        cur = offset
+        while cur <= total_seconds:
+            if cur > 0:
+                items.append(float(cur))
+            cur += step
+
+        if not items:
+            QMessageBox.information(self, "No Intervals", "No intervals generated with the given parameters.")
+            return
+
+        # dedupe & sort
+        items = sorted(set(items))
+        self.result_intervals = items
+        # store into the active set immediately
+        if 0 <= self.current_set_index < len(self.result_sets):
+            self.result_sets[self.current_set_index]["intervals"] = list(items)
+        self.rebuild_list()
+        self.list_widget.setCurrentRow(0)
 
     def move_up(self) -> None:
         idx = self.selected_index()
@@ -833,6 +953,13 @@ class TimerApp(QWidget):
             interval_sets = []
             if isinstance(interval_sets_raw, list):
                 interval_sets = clean_interval_sets(interval_sets_raw)
+
+                # Ensure per-set keybind defaults exist (can be empty to unbind)
+                for s in interval_sets:
+                    if "key_prev" not in s:
+                        s["key_prev"] = "q"
+                    if "key_next" not in s:
+                        s["key_next"] = "e"
 
             # Backward compatibility with older settings shape.
             if not interval_sets:
@@ -1255,6 +1382,20 @@ class TimerApp(QWidget):
                         trigger_on_release=False,
                     )
                 )
+            # Register per-set prev/next keys
+            for s in self.interval_sets:
+                kp = str(s.get("key_prev", "") or "").strip()
+                kn = str(s.get("key_next", "") or "").strip()
+                if kp:
+                    try:
+                        self.hotkeys.append(keyboard.add_hotkey(kp, partial(self.shift_interval_display, -1), suppress=False, trigger_on_release=False))
+                    except Exception:
+                        pass
+                if kn:
+                    try:
+                        self.hotkeys.append(keyboard.add_hotkey(kn, partial(self.shift_interval_display, 1), suppress=False, trigger_on_release=False))
+                    except Exception:
+                        pass
         except Exception as exc:
             QMessageBox.warning(self, "Hotkey Error", f"Failed to register global hotkeys:\n{exc}")
 
