@@ -86,6 +86,9 @@ DEFAULT_INTERVALS = [
     356.1,
 ]
 DEFAULT_INTERVAL_SETS = [{"name": DEFAULT_INTERVAL_NAME, "intervals": list(DEFAULT_INTERVALS)}]
+DEFAULT_INTERVAL_SETS[0]["key_prev"] = "q"
+DEFAULT_INTERVAL_SETS[0]["key_next"] = "e"
+DEFAULT_INTERVAL_SETS[0]["display_offset_seconds"] = 0.0
 
 
 def get_settings_dir() -> str:
@@ -174,12 +177,6 @@ def clean_interval_sets(raw_sets: list[dict]) -> list[dict]:
         cleaned_item = dict(item)
         cleaned_item["name"] = name
         cleaned_item["intervals"] = parsed
-        if "key_prev" not in cleaned_item:
-            cleaned_item["key_prev"] = "q"
-        if "key_next" not in cleaned_item:
-            cleaned_item["key_next"] = "e"
-        if "display_offset_seconds" not in cleaned_item:
-            cleaned_item["display_offset_seconds"] = 0.0
         cleaned.append(cleaned_item)
 
     return cleaned
@@ -463,10 +460,6 @@ class IntervalsManagerDialog(QDialog):
 
         self.result_sets = [dict(s) for s in interval_sets] if interval_sets else [{"name": DEFAULT_INTERVAL_NAME, "intervals": []}]
         for s in self.result_sets:
-            if "key_prev" not in s:
-                s["key_prev"] = "q"
-            if "key_next" not in s:
-                s["key_next"] = "e"
             if "display_offset_seconds" not in s:
                 s["display_offset_seconds"] = 0.0
         self.current_set_index = 0
@@ -1171,7 +1164,7 @@ class TimerApp(QWidget):
         if direction == 0:
             return
         current_offset = float(self.interval_sets[set_index].get("display_offset_seconds", 0.0) or 0.0)
-        self.interval_sets[set_index]["display_offset_seconds"] = max(0.0, current_offset - float(direction))
+        self.interval_sets[set_index]["display_offset_seconds"] = current_offset - float(direction)
         self.refresh_labels()
 
     def open_keybind_settings(self) -> None:
