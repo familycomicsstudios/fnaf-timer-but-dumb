@@ -56,6 +56,7 @@ RECENT_FILE_LIMIT = 8
 
 DEFAULT_KEYBINDS = {
     "main": "r",
+    "stop": "y",
     "sub1": "t",
     "sub2": "u",
     "sub3": "i",
@@ -216,11 +217,21 @@ def normalize_key(raw: str) -> str:
 @dataclass
 class TimerState:
     start_time: float
+    paused: bool = False
+    paused_elapsed: float = 0.0
 
     def reset(self) -> None:
         self.start_time = time.monotonic()
+        self.paused = False
+        self.paused_elapsed = 0.0
+
+    def stop(self) -> None:
+        self.paused_elapsed = self.elapsed()
+        self.paused = True
 
     def elapsed(self) -> float:
+        if self.paused:
+            return self.paused_elapsed
         return time.monotonic() - self.start_time
 
 
@@ -242,6 +253,7 @@ class KeybindDialog(QDialog):
         self.capture_buttons = {}
         labels = [
             ("main", "Main Timer"),
+            ("stop", "Stop All"),
             ("sub1", "Subtimer 1"),
             ("sub2", "Subtimer 2"),
             ("sub3", "Subtimer 3"),
@@ -892,6 +904,10 @@ class TimerApp(QWidget):
         alert_action.triggered.connect(self.open_interval_alert_settings)
         menu.addAction(alert_action)
 
+        stop_action = QAction("Stop All Timers", self)
+        stop_action.triggered.connect(self.stop_all_timers)
+        menu.addAction(stop_action)
+
         menu.addSeparator()
         manage_intervals_action = QAction("Intervals Manager", self)
         manage_intervals_action.triggered.connect(self.open_intervals_manager)
@@ -1069,6 +1085,12 @@ class TimerApp(QWidget):
             timer.reset()
         self.sound_triggered_keys.clear()
         self.interval_display_offset_seconds = 0.0
+        self.refresh_labels()
+
+    def stop_all_timers(self) -> None:
+        self.main_timer.stop()
+        for timer in self.sub_timers:
+            timer.stop()
         self.refresh_labels()
 
     def reset_sub(self, index: int) -> None:
@@ -1360,6 +1382,8 @@ class TimerApp(QWidget):
 
         try:
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["main"], self.reset_main, suppress=False, trigger_on_release=False))
+            if "stop" in self.keybinds and self.keybinds["stop"]:
+                self.hotkeys.append(keyboard.add_hotkey(self.keybinds["stop"], self.stop_all_timers, suppress=False, trigger_on_release=False))
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["sub1"], lambda: self.reset_sub(0), suppress=False, trigger_on_release=False))
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["sub2"], lambda: self.reset_sub(1), suppress=False, trigger_on_release=False))
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["sub3"], lambda: self.reset_sub(2), suppress=False, trigger_on_release=False))
