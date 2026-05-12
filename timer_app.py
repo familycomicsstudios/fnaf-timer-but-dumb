@@ -20,6 +20,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -40,8 +41,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from functools import partial
 
 try:
     import keyboard
@@ -67,6 +66,8 @@ DEFAULT_KEYBINDS = {
 DEFAULT_ACTIVE_SUBTIMERS = 1
 DEFAULT_BLINK_LEAD_SECONDS = 3
 DEFAULT_SOUND_LEAD_SECONDS = 3
+DEFAULT_ENABLE_INTERVAL_FLASH = True
+DEFAULT_ENABLE_INTERVAL_BEEP = True
 DEFAULT_INTERVAL_NAME = "Blank"
 DEFAULT_INTERVALS = [
     24.0,
@@ -170,7 +171,16 @@ def clean_interval_sets(raw_sets: list[dict]) -> list[dict]:
             continue
 
         parsed.sort()
-        cleaned.append({"name": name, "intervals": parsed})
+        cleaned_item = dict(item)
+        cleaned_item["name"] = name
+        cleaned_item["intervals"] = parsed
+        if "key_prev" not in cleaned_item:
+            cleaned_item["key_prev"] = "q"
+        if "key_next" not in cleaned_item:
+            cleaned_item["key_next"] = "e"
+        if "display_offset_seconds" not in cleaned_item:
+            cleaned_item["display_offset_seconds"] = 0.0
+        cleaned.append(cleaned_item)
 
     return cleaned
 
@@ -387,11 +397,18 @@ class KeyCaptureDialog(QDialog):
 
 
 class IntervalAlertDialog(QDialog):
-    def __init__(self, parent: QWidget, blink_seconds: int, sound_seconds: int):
+    def __init__(
+        self,
+        parent: QWidget,
+        blink_seconds: int,
+        sound_seconds: int,
+        enable_flash: bool,
+        enable_beep: bool,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Interval Alert Settings")
         self.setModal(True)
-        self.resize(320, 180)
+        self.resize(360, 220)
 
         root = QVBoxLayout(self)
         form = QFormLayout()
@@ -408,6 +425,14 @@ class IntervalAlertDialog(QDialog):
         self.sound_spin.setValue(sound_seconds)
         form.addRow("Sound before interval (s):", self.sound_spin)
 
+        self.flash_check = QCheckBox("Enable flash alerts", self)
+        self.flash_check.setChecked(enable_flash)
+        form.addRow(self.flash_check)
+
+        self.beep_check = QCheckBox("Enable beep alerts", self)
+        self.beep_check.setChecked(enable_beep)
+        form.addRow(self.beep_check)
+
         root.addLayout(form)
 
         actions = QHBoxLayout()
@@ -420,8 +445,13 @@ class IntervalAlertDialog(QDialog):
         actions.addWidget(cancel_btn)
         root.addLayout(actions)
 
-    def get_result(self) -> tuple[int, int]:
-        return self.blink_spin.value(), self.sound_spin.value()
+    def get_result(self) -> tuple[int, int, bool, bool]:
+        return (
+            self.blink_spin.value(),
+            self.sound_spin.value(),
+            self.flash_check.isChecked(),
+            self.beep_check.isChecked(),
+        )
 
 
 class IntervalsManagerDialog(QDialog):
@@ -432,8 +462,16 @@ class IntervalsManagerDialog(QDialog):
         self.resize(520, 480)
 
         self.result_sets = [dict(s) for s in interval_sets] if interval_sets else [{"name": DEFAULT_INTERVAL_NAME, "intervals": []}]
+        for s in self.result_sets:
+            if "key_prev" not in s:
+                s["key_prev"] = "q"
+            if "key_next" not in s:
+                s["key_next"] = "e"
+            if "display_offset_seconds" not in s:
+                s["display_offset_seconds"] = 0.0
         self.current_set_index = 0
         self.result_intervals = list(self.result_sets[0].get("intervals", []))
+        self.initializing = True
 
         root = QVBoxLayout(self)
 
@@ -542,7 +580,8 @@ class IntervalsManagerDialog(QDialog):
         root.addLayout(actions)
 
         self.rebuild_set_combo()
-        self.on_set_changed(0)
+        self.load_set(0)
+        self.initializing = False
 
     def rebuild_set_combo(self) -> None:
         self.set_combo.blockSignals(True)
@@ -563,17 +602,28 @@ class IntervalsManagerDialog(QDialog):
         self.key_prev_label.setText(ks["key_prev"] or "(none)")
         self.key_next_label.setText(ks["key_next"] or "(none)")
 
-    def on_set_changed(self, index: int) -> None:
-        if index < 0 or index >= len(self.result_sets):
+    def save_current_set_state(self) -> None:
+        if self.current_set_index < 0 or self.current_set_index >= len(self.result_sets):
             return
         current_set = self.result_sets[self.current_set_index]
         current_set["name"] = self.interval_text_edit.text().strip() or DEFAULT_INTERVAL_NAME
         current_set["intervals"] = list(self.result_intervals)
+
+    def load_set(self, index: int) -> None:
+        if index < 0 or index >= len(self.result_sets):
+            return
         self.current_set_index = index
         self.result_intervals = list(self.result_sets[index].get("intervals", []))
         self.interval_text_edit.setText(str(self.result_sets[index].get("name", DEFAULT_INTERVAL_NAME)))
         self.rebuild_list()
         self.update_key_labels()
+
+    def on_set_changed(self, index: int) -> None:
+        if index < 0 or index >= len(self.result_sets):
+            return
+        if not self.initializing:
+            self.save_current_set_state()
+        self.load_set(index)
 
     def rebuild_list(self) -> None:
         self.list_widget.clear()
@@ -585,7 +635,13 @@ class IntervalsManagerDialog(QDialog):
         return self.list_widget.currentRow()
 
     def add_set(self) -> None:
-        new_set = {"name": f"Set {len(self.result_sets) + 1}", "intervals": [], "key_prev": "q", "key_next": "e"}
+        new_set = {
+            "name": f"Set {len(self.result_sets) + 1}",
+            "intervals": [],
+            "key_prev": "q",
+            "key_next": "e",
+            "display_offset_seconds": 0.0,
+        }
         self.result_sets.append(new_set)
         self.rebuild_set_combo()
         self.set_combo.setCurrentIndex(len(self.result_sets) - 1)
@@ -728,9 +784,7 @@ class IntervalsManagerDialog(QDialog):
         self.rebuild_list()
 
     def accept_with_validation(self) -> None:
-        current_set = self.result_sets[self.current_set_index]
-        current_set["name"] = self.interval_text_edit.text().strip() or DEFAULT_INTERVAL_NAME
-        current_set["intervals"] = list(self.result_intervals)
+        self.save_current_set_state()
         for s in self.result_sets:
             if not s.get("intervals"):
                 QMessageBox.warning(self, "Empty Set", "All interval sets must have at least one interval.")
@@ -751,6 +805,8 @@ class TimerApp(QWidget):
             self.active_subtimers,
             self.blink_lead_seconds,
             self.sound_lead_seconds,
+            self.enable_interval_flash,
+            self.enable_interval_beep,
             self.interval_sets,
             self.recent_interval_files,
             self.current_interval_file,
@@ -760,7 +816,6 @@ class TimerApp(QWidget):
         self.drag_active = False
         self.drag_offset = QPoint()
         self.sound_triggered_keys = set()
-        self.interval_display_offset_seconds = 0.0
 
         self.main_timer = TimerState(time.monotonic())
         self.sub_timers = [TimerState(time.monotonic()) for _ in range(4)]
@@ -939,13 +994,15 @@ class TimerApp(QWidget):
         self.unbind_hotkeys()
         super().closeEvent(event)
 
-    def load_settings(self) -> tuple[dict, int, int, int, list[dict], list[str], str]:
+    def load_settings(self) -> tuple[dict, int, int, int, bool, bool, list[dict], list[str], str]:
         if not os.path.exists(self.settings_path):
             return (
                 dict(DEFAULT_KEYBINDS),
                 DEFAULT_ACTIVE_SUBTIMERS,
                 DEFAULT_BLINK_LEAD_SECONDS,
                 DEFAULT_SOUND_LEAD_SECONDS,
+                DEFAULT_ENABLE_INTERVAL_FLASH,
+                DEFAULT_ENABLE_INTERVAL_BEEP,
                 clean_interval_sets(DEFAULT_INTERVAL_SETS),
                 [],
                 "",
@@ -964,6 +1021,8 @@ class TimerApp(QWidget):
             blink_lead = max(0, min(600, blink_lead))
             sound_lead = int(data.get("sound_lead_seconds", DEFAULT_SOUND_LEAD_SECONDS))
             sound_lead = max(0, min(600, sound_lead))
+            enable_flash = bool(data.get("enable_interval_flash", DEFAULT_ENABLE_INTERVAL_FLASH))
+            enable_beep = bool(data.get("enable_interval_beep", DEFAULT_ENABLE_INTERVAL_BEEP))
 
             interval_sets_raw = data.get("interval_sets", [])
             interval_sets = []
@@ -1002,13 +1061,15 @@ class TimerApp(QWidget):
             recent = [str(p) for p in recent if isinstance(p, str)]
 
             current_interval_file = str(data.get("current_interval_file", "") or "")
-            return keybinds, active, blink_lead, sound_lead, interval_sets, recent, current_interval_file
+            return keybinds, active, blink_lead, sound_lead, enable_flash, enable_beep, interval_sets, recent, current_interval_file
         except Exception:
             return (
                 dict(DEFAULT_KEYBINDS),
                 DEFAULT_ACTIVE_SUBTIMERS,
                 DEFAULT_BLINK_LEAD_SECONDS,
                 DEFAULT_SOUND_LEAD_SECONDS,
+                DEFAULT_ENABLE_INTERVAL_FLASH,
+                DEFAULT_ENABLE_INTERVAL_BEEP,
                 clean_interval_sets(DEFAULT_INTERVAL_SETS),
                 [],
                 "",
@@ -1020,6 +1081,8 @@ class TimerApp(QWidget):
             "active_subtimers": self.active_subtimers,
             "blink_lead_seconds": self.blink_lead_seconds,
             "sound_lead_seconds": self.sound_lead_seconds,
+            "enable_interval_flash": self.enable_interval_flash,
+            "enable_interval_beep": self.enable_interval_beep,
             "interval_sets": self.interval_sets,
             "recent_interval_files": self.recent_interval_files[:RECENT_FILE_LIMIT],
             "current_interval_file": self.current_interval_file,
@@ -1052,24 +1115,25 @@ class TimerApp(QWidget):
             intervals = interval_set.get("intervals", [])
             if not isinstance(intervals, list):
                 intervals = []
+            display_offset = float(interval_set.get("display_offset_seconds", 0.0) or 0.0)
 
             line_text, target = build_interval_set_line(
-                set_name, intervals, elapsed, self.interval_display_offset_seconds
+                set_name, intervals, elapsed, display_offset
             )
             label.setText(line_text)
             if target is None:
                 label.setStyleSheet("color: rgb(120, 120, 120); background-color: transparent;")
                 continue
 
-            adjusted_target = target - self.interval_display_offset_seconds
+            adjusted_target = target - display_offset
             remaining = adjusted_target - elapsed
             sound_key = f"{idx}:{adjusted_target:.3f}"
 
-            if 0.0 < remaining <= float(self.sound_lead_seconds) and sound_key not in self.sound_triggered_keys:
+            if self.enable_interval_beep and 0.0 < remaining <= float(self.sound_lead_seconds) and sound_key not in self.sound_triggered_keys:
                 QApplication.beep()
                 self.sound_triggered_keys.add(sound_key)
 
-            if 0.0 < remaining <= float(self.blink_lead_seconds):
+            if self.enable_interval_flash and 0.0 < remaining <= float(self.blink_lead_seconds):
                 if blink_now:
                     label.setStyleSheet("color: rgb(255, 96, 96); background-color: transparent;")
                 else:
@@ -1084,7 +1148,8 @@ class TimerApp(QWidget):
         for timer in self.sub_timers:
             timer.reset()
         self.sound_triggered_keys.clear()
-        self.interval_display_offset_seconds = 0.0
+        for interval_set in self.interval_sets:
+            interval_set["display_offset_seconds"] = 0.0
         self.refresh_labels()
 
     def stop_all_timers(self) -> None:
@@ -1099,11 +1164,14 @@ class TimerApp(QWidget):
         self.sub_timers[index].reset()
         self.refresh_labels()
 
-    def shift_interval_display(self, direction: int) -> None:
-        """Shift interval labels (and alert timing) without moving the main timer. Reset clears offset."""
+    def shift_interval_display(self, set_index: int, direction: int) -> None:
+        """Shift one interval set's labels by 1 second without moving the main timer."""
+        if set_index < 0 or set_index >= len(self.interval_sets):
+            return
         if direction == 0:
             return
-        self.interval_display_offset_seconds -= float(direction)
+        current_offset = float(self.interval_sets[set_index].get("display_offset_seconds", 0.0) or 0.0)
+        self.interval_sets[set_index]["display_offset_seconds"] = max(0.0, current_offset - float(direction))
         self.refresh_labels()
 
     def open_keybind_settings(self) -> None:
@@ -1129,12 +1197,21 @@ class TimerApp(QWidget):
         self.bind_hotkeys()
 
     def open_interval_alert_settings(self) -> None:
-        dlg = IntervalAlertDialog(self, self.blink_lead_seconds, self.sound_lead_seconds)
+        dlg = IntervalAlertDialog(
+            self,
+            self.blink_lead_seconds,
+            self.sound_lead_seconds,
+            self.enable_interval_flash,
+            self.enable_interval_beep,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        blink, sound = dlg.get_result()
+        blink, sound, enable_flash, enable_beep = dlg.get_result()
         self.blink_lead_seconds = blink
         self.sound_lead_seconds = sound
+        self.enable_interval_flash = enable_flash
+        self.enable_interval_beep = enable_beep
+        self.sound_triggered_keys.clear()
         self.save_settings()
 
 
@@ -1178,8 +1255,9 @@ class TimerApp(QWidget):
             intervals = interval_set.get("intervals", [])
             if not isinstance(intervals, list):
                 intervals = []
+            display_offset = float(interval_set.get("display_offset_seconds", 0.0) or 0.0)
             line_text, _ = build_interval_set_line(
-                set_name, intervals, elapsed, self.interval_display_offset_seconds
+                set_name, intervals, elapsed, display_offset
             )
             label = QLabel(line_text, self.interval_content)
             label.setFont(QFont("Tahoma", 11, QFont.Weight.Bold))
@@ -1388,38 +1466,21 @@ class TimerApp(QWidget):
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["sub2"], lambda: self.reset_sub(1), suppress=False, trigger_on_release=False))
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["sub3"], lambda: self.reset_sub(2), suppress=False, trigger_on_release=False))
             self.hotkeys.append(keyboard.add_hotkey(self.keybinds["sub4"], lambda: self.reset_sub(3), suppress=False, trigger_on_release=False))
-            if "interval_prev" in self.keybinds:
-                self.hotkeys.append(
-                    keyboard.add_hotkey(
-                        self.keybinds["interval_prev"],
-                        lambda: self.shift_interval_display(-1),
-                        suppress=False,
-                        trigger_on_release=False,
-                    )
-                )
-            if "interval_next" in self.keybinds:
-                self.hotkeys.append(
-                    keyboard.add_hotkey(
-                        self.keybinds["interval_next"],
-                        lambda: self.shift_interval_display(1),
-                        suppress=False,
-                        trigger_on_release=False,
-                    )
-                )
-            # Register per-set prev/next keys
-            for s in self.interval_sets:
-                kp = str(s.get("key_prev", "") or "").strip()
-                kn = str(s.get("key_next", "") or "").strip()
-                if kp:
-                    try:
-                        self.hotkeys.append(keyboard.add_hotkey(kp, partial(self.shift_interval_display, -1), suppress=False, trigger_on_release=False))
-                    except Exception:
-                        pass
-                if kn:
-                    try:
-                        self.hotkeys.append(keyboard.add_hotkey(kn, partial(self.shift_interval_display, 1), suppress=False, trigger_on_release=False))
-                    except Exception:
-                        pass
+            interval_key_map: dict[str, list[tuple[int, int]]] = {}
+            for index, interval_set in enumerate(self.interval_sets):
+                prev_key = normalize_key(str(interval_set.get("key_prev", "") or ""))
+                next_key = normalize_key(str(interval_set.get("key_next", "") or ""))
+                if prev_key:
+                    interval_key_map.setdefault(prev_key, []).append((index, -1))
+                if next_key:
+                    interval_key_map.setdefault(next_key, []).append((index, 1))
+
+            for key_name, actions in interval_key_map.items():
+                def run_interval_actions(action_list=tuple(actions)) -> None:
+                    for set_index, direction in action_list:
+                        self.shift_interval_display(set_index, direction)
+
+                self.hotkeys.append(keyboard.add_hotkey(key_name, run_interval_actions, suppress=False, trigger_on_release=False))
         except Exception as exc:
             QMessageBox.warning(self, "Hotkey Error", f"Failed to register global hotkeys:\n{exc}")
 
